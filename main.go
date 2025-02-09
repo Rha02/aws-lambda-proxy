@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -29,12 +30,16 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 	// Send Proxy request
 	res, err := http.Get(body.Url)
 	if err != nil {
+		errMsg, _ := json.Marshal(err.Error())
 		return events.APIGatewayProxyResponse{
 			StatusCode: 500,
 			Headers: map[string]string{
 				"Content-Type": "application/json",
 			},
-			Body: `{"error": "Failed to send request to the url"}`,
+			Body: fmt.Sprintf(`{
+				"error": "Failed to send request to the url",
+				"details": %s
+			}`, errMsg),
 		}, nil
 	}
 	// Defer closing response body
@@ -52,11 +57,14 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 		}, nil
 	}
 
+	// Get response content-type
+	contentType := res.Header.Get("Content-Type")
+
 	// Return response
 	return events.APIGatewayProxyResponse{
 		StatusCode: res.StatusCode,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": contentType,
 		},
 		Body: string(resBody),
 	}, nil
