@@ -5,30 +5,44 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/joho/godotenv"
 )
 
-type RequestBody struct {
-	Url string `json:"url"`
-}
-
 func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// Parse request body
-	var body RequestBody
-	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
+	urlParams := req.QueryStringParameters
+	target, ok := urlParams["url"]
+	if !ok {
 		return events.APIGatewayProxyResponse{
 			StatusCode: 400,
 			Headers: map[string]string{
 				"Content-Type": "application/json",
 			},
-			Body: `{"error": "Failed to parse request JSON body"}`,
+			Body: `{"error": "Missing query parameter: url."}`,
 		}, nil
 	}
 
-	// Send Proxy request
-	res, err := http.Get(body.Url)
+	request, err := http.NewRequest(req.HTTPMethod, target, strings.NewReader(req.Body))
+	if err != nil {
+		return events.APIGatewayProxyResponse{
+			StatusCode: 400,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			Body: `{"error": "Error creating request"}`,
+		}, nil
+	}
+
+	for headerKey, headerValue := range req.Headers {
+		request.Header.Set(headerKey, headerValue)
+	}
+
+	client := &http.Client{}
+	res, err := client.Do(request)
 	if err != nil {
 		errMsg, _ := json.Marshal(err.Error())
 		return events.APIGatewayProxyResponse{
@@ -42,10 +56,8 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 			}`, errMsg),
 		}, nil
 	}
-	// Defer closing response body
 	defer res.Body.Close()
 
-	// Read response body
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		return events.APIGatewayProxyResponse{
@@ -57,19 +69,58 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 		}, nil
 	}
 
-	// Get response content-type
-	contentType := res.Header.Get("Content-Type")
+	resHeaders := make(map[string]string)
+	for key, _ := range res.Header {
+		resHeaders[key] = res.Header.Get(key)
+	}
 
-	// Return response
 	return events.APIGatewayProxyResponse{
 		StatusCode: res.StatusCode,
-		Headers: map[string]string{
-			"Content-Type": contentType,
-		},
-		Body: string(resBody),
+		Headers:    resHeaders,
+		Body:       string(resBody),
 	}, nil
 }
 
+func devToLambdaHandler(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+
+	queryParamsMap := make(map[string]string)
+	queryParams := r.URL.Query()
+	for key, v := range queryParams {
+		queryParamsMap[key] = v[0]
+	}
+
+	headers := make(map[string]string)
+	for key, v := range r.Header {
+		headers[key] = v[0]
+	}
+
+	lambdaReq := events.APIGatewayProxyRequest{
+		Headers:               headers,
+		HTTPMethod:            r.Method,
+		QueryStringParameters: queryParamsMap,
+		Body:                  string(body),
+	}
+
+	res, err := requestHandler(lambdaReq)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	w.WriteHeader(res.StatusCode)
+	w.Write([]byte(res.Body))
+}
+
 func main() {
-	lambda.Start(requestHandler)
+	godotenv.Load()
+
+	environment := os.Getenv("ENVIRONMENT")
+	if environment == "dev" {
+		http.HandleFunc("/lambda", devToLambdaHandler)
+		http.ListenAndServe(":8081", nil)
+	} else {
+		lambda.Start(requestHandler)
+	}
 }
