@@ -70,7 +70,7 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 	}
 
 	resHeaders := make(map[string]string)
-	for key, _ := range res.Header {
+	for key := range res.Header {
 		resHeaders[key] = res.Header.Get(key)
 	}
 
@@ -107,6 +107,10 @@ func devToLambdaHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		return
+	}
+
+	for key, v := range res.Headers {
+		w.Header().Add(key, v)
 	}
 
 	w.WriteHeader(res.StatusCode)
