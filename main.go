@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -13,20 +14,50 @@ import (
 	"github.com/joho/godotenv"
 )
 
+type ProxyRequest struct {
+	URL     string            `json:"url"`
+	Method  string            `json:"method"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+}
+
 func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	urlParams := req.QueryStringParameters
-	target, ok := urlParams["url"]
-	if !ok {
+	var proxyReq ProxyRequest
+	if err := json.Unmarshal([]byte(req.Body), &proxyReq); err != nil {
 		return events.APIGatewayProxyResponse{
 			StatusCode: 400,
 			Headers: map[string]string{
 				"Content-Type": "application/json",
 			},
-			Body: `{"error": "Missing query parameter: url."}`,
+			Body: `{"error": "Invalid request body format"}`,
 		}, nil
 	}
 
-	request, err := http.NewRequest(req.HTTPMethod, target, strings.NewReader(req.Body))
+	if proxyReq.URL == "" {
+		return events.APIGatewayProxyResponse{
+			StatusCode: 400,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			Body: `{"error": "Missing url in request body"}`,
+		}, nil
+	}
+
+	if _, err := url.Parse(proxyReq.URL); err != nil {
+		return events.APIGatewayProxyResponse{
+			StatusCode: 400,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			Body: `{"error": "Invalid URL format"}`,
+		}, nil
+	}
+
+	if proxyReq.Method == "" {
+		proxyReq.Method = "POST"
+	}
+
+	request, err := http.NewRequest(proxyReq.Method, proxyReq.URL, strings.NewReader(proxyReq.Body))
 	if err != nil {
 		return events.APIGatewayProxyResponse{
 			StatusCode: 400,
@@ -37,7 +68,7 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 		}, nil
 	}
 
-	for headerKey, headerValue := range req.Headers {
+	for headerKey, headerValue := range proxyReq.Headers {
 		request.Header.Set(headerKey, headerValue)
 	}
 
@@ -65,7 +96,7 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 			Headers: map[string]string{
 				"Content-Type": "application/json",
 			},
-			Body: `{"error": "Failed to read response JSON body"}`,
+			Body: `{"error": "Failed to read response body"}`,
 		}, nil
 	}
 
@@ -82,24 +113,15 @@ func requestHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRe
 }
 
 func devToLambdaHandler(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
-
-	queryParamsMap := make(map[string]string)
-	queryParams := r.URL.Query()
-	for key, v := range queryParams {
-		queryParamsMap[key] = v[0]
-	}
-
-	headers := make(map[string]string)
-	for key, v := range r.Header {
-		headers[key] = v[0]
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error": "Failed to read request body"}`))
+		return
 	}
 
 	lambdaReq := events.APIGatewayProxyRequest{
-		Headers:               headers,
-		HTTPMethod:            r.Method,
-		QueryStringParameters: queryParamsMap,
-		Body:                  string(body),
+		Body: string(body),
 	}
 
 	res, err := requestHandler(lambdaReq)
