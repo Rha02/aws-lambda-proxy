@@ -4,7 +4,7 @@ This is a simple proxy built utilizing AWS Lambda functions.
 ## Compiling
 On a Linux machine, run the following commands:
 ```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap main.go
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -tags lambda.norpc -o bootstrap *.go
 ```
 Zip the compiled binary:
 ```
